@@ -9,10 +9,10 @@
 #include <string.h>
 #include <stdint.h>
 
-#define PAGE_SIZE 256
-#define PAGE_COUNT 256
-#define FRAME_COUNT 256
-#define TLB_SIZE 16
+#define PAGESIZE 256
+#define PAGECOUNT 256
+#define FRAMECOUNT 256
+#define TLBSIZE 16
 
 typedef struct {
     int page;
@@ -20,34 +20,34 @@ typedef struct {
     int valid;
 } TLBEntry;
 
-static signed char memory[FRAME_COUNT][PAGE_SIZE];
-static int page_table[PAGE_COUNT];
-static TLBEntry tlb[TLB_SIZE];
-static int tlb_next = 0;
-static int frames_used = 0;
+static signed char memory[FRAMECOUNT][PAGESIZE];
+static int pageTable[PAGECOUNT];
+static TLBEntry tlb[TLBSIZE];
+static int tlbCursor = 0;
+static int usedFrames = 0;
 
-static int lookup_tlb(int page) {
-    for (int i = 0; i < TLB_SIZE; i++) {
+static int getTLB(int page) {
+    for (int i = 0; i < TLBSIZE; i++) {
         if (tlb[i].valid && tlb[i].page == page)
             return tlb[i].frame;
     }
     return -1;
 }
 
-static void insert_tlb(int page, int frame) {
+static void setTLB(int page, int frame) {
     /* FIFO: overwrite the entry that has been in the TLB longest. */
-    tlb[tlb_next] = (TLBEntry){page, frame, 1};
-    tlb_next = (tlb_next + 1) % TLB_SIZE;
+    tlb[tlbCursor] = (TLBEntry){page, frame, 1};
+    tlbCursor = (tlbCursor + 1) % TLBSIZE;
 }
 
-static int load_page(FILE *backing, int page) {
-    if (frames_used >= FRAME_COUNT) return -1;
-    int frame = frames_used;
-    if (fseek(backing, (long)page * PAGE_SIZE, SEEK_SET) != 0 ||
-        fread(memory[frame], 1, PAGE_SIZE, backing) != PAGE_SIZE)
+static int loadPage(FILE *backing, int page) {
+    if (usedFrames >= FRAMECOUNT) return -1;
+    int frame = usedFrames;
+    if (fseek(backing, (long)page * PAGESIZE, SEEK_SET) != 0 ||
+        fread(memory[frame], 1, PAGESIZE, backing) != PAGESIZE)
         return -1;
-    frames_used++;
-    page_table[page] = frame;
+    usedFrames++;
+    pageTable[page] = frame;
     return frame;
 }
 
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
         fclose(backing);
         return 1;
     }
-    for (int i = 0; i < PAGE_COUNT; i++) page_table[i] = -1;
+    for (int i = 0; i < PAGECOUNT; i++) pageTable[i] = -1;
 
     long total = 0, faults = 0, hits = 0;
     unsigned int input;
@@ -85,14 +85,14 @@ int main(int argc, char **argv) {
         unsigned int logical = input & 0xFFFFu;
         int page = (int)((logical >> 8) & 0xFFu);
         int offset = (int)(logical & 0xFFu);
-        int frame = lookup_tlb(page);
+        int frame = getTLB(page);
         if (frame >= 0) {
             hits++;
         } else {
-            frame = page_table[page];
+            frame = pageTable[page];
             if (frame < 0) {
                 faults++;
-                frame = load_page(backing, page);
+                frame = loadPage(backing, page);
                 if (frame < 0) {
                     fprintf(stderr, "Failed to load page %d\n", page);
                     fclose(out1); fclose(out2); fclose(out3);
@@ -100,9 +100,9 @@ int main(int argc, char **argv) {
                     return 1;
                 }
             }
-            insert_tlb(page, frame);
+            setTLB(page, frame);
         }
-        int physical = frame * PAGE_SIZE + offset;
+        int physical = frame * PAGESIZE + offset;
         int value = (int)memory[frame][offset];
         fprintf(out1, "%u\n", input);
         fprintf(out2, "%d\n", physical);
