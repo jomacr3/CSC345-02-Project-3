@@ -24,31 +24,31 @@ static signed char memory[MAX_FRAMES][PAGE_SIZE];
 static int pageTable[PAGE_COUNT];
 static int framePage[MAX_FRAMES];
 static TLBEntry tlb[TLB_SIZE];
-static int tlbNext = 0;
-static int nextFree = 0;
+static int tlbCursor = 0;
+static int usedFrames = 0;
 static int fifoVictim = 0;
 
-static int tlbLookup(int page) {
+static int getTLB(int page) {
     for (int i = 0; i < TLB_SIZE; i++)
         if (tlb[i].valid && tlb[i].page == page) return tlb[i].frame;
     return -1;
 }
 
-static void tlbInsert(int page, int frame) {
-    tlb[tlbNext] = (TLBEntry){page, frame, 1};
-    tlbNext = (tlbNext + 1) % TLB_SIZE;
+static void setTLB(int page, int frame) {
+    tlb[tlbCursor] = (TLBEntry){page, frame, 1};
+    tlbCursor = (tlbCursor + 1) % TLB_SIZE;
 }
 
-static void tlbRemove(int page) {
+static void removeTLB(int page) {
     /* Evicted pages must never remain accessible through the TLB. */
     for (int i = 0; i < TLB_SIZE; i++)
         if (tlb[i].valid && tlb[i].page == page) tlb[i].valid = 0;
 }
 
-static int pageFault(FILE *backing, int page, int frameCount) {
+static int loadPage(FILE *backing, int page, int frameCount) {
     int frame;
-    if (nextFree < frameCount) {
-        frame = nextFree++;
+    if (usedFrames < frameCount) {
+        frame = usedFrames++;
     } else {
         /* FIFO picks the frame containing the oldest loaded page. */
         frame = fifoVictim;
@@ -56,7 +56,7 @@ static int pageFault(FILE *backing, int page, int frameCount) {
         int oldPage = framePage[frame];
         if (oldPage >= 0) {
             pageTable[oldPage] = -1;
-            tlbRemove(oldPage);
+            removeTLB(oldPage);
         }
     }
     if (fseek(backing, (long)page * PAGE_SIZE, SEEK_SET) != 0 ||
@@ -110,14 +110,14 @@ int main(int argc, char **argv) {
         unsigned int logical = input & 0xFFFFu;
         int page = (int)((logical >> 8) & 0xFFu);
         int offset = (int)(logical & 0xFFu);
-        int frame = tlbLookup(page);
+        int frame = getTLB(page);
         if (frame >= 0) {
             hits++;
         } else {
             frame = pageTable[page];
             if (frame < 0) {
                 faults++;
-                frame = pageFault(backing, page, frameCount);
+                frame = loadPage(backing, page, frameCount);
                 if (frame < 0) {
                     fprintf(stderr, "Failed to load page %d\n", page);
                     fclose(out1); fclose(out2); fclose(out3);
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
                     return 1;
                 }
             }
-            tlbInsert(page, frame);
+            setTLB(page, frame);
         }
         fprintf(out1, "%u\n", input);
         fprintf(out2, "%d\n", frame * PAGE_SIZE + offset);
