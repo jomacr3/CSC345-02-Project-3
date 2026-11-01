@@ -1,0 +1,71 @@
+The virtual memory manager was implemented in three separate C programs: main1. c, main2.c, and main3.c. Each program simulates how an operating system translates logical addresses into physical addresses using a page table, a Translation Lookaside Buffer (TLB), and a backing store. The three programs differ in how they manage physical memory when all available frames are occupied. main1.c uses no page replacement; main2.c implements the First-In, First-Out (FIFO) page replacement algorithm, and main3.c implements the Least Recently Used (LRU) page replacement algorithm. All three programs use a FIFO replacement policy for the TLB.
+
+The programs divide logical memory into pages of 256 bytes each. Since the logical address is 16 bits, it contains an 8-bit page number and an 8-bit offset. This allows the programs to address 256 pages, each containing 256 bytes.
+
+The programs use several data structures to simulate memory management:
+
+* Physical memory: A two-dimensional array stores physical memory contents. Each row represents a frame, which contains 256 bytes.
+* Page table: An array of 256 integers maps each virtual page to its corresponding physical frame. A value of -1 indicates that the page is not currently loaded into memory.
+* Translation Lookaside Buffer (TLB): A 16-entry array stores recently inserted page-to-frame translations to speed up address translation. Each entry contains a page number, a frame number, and a validity flag.
+* Frame tracking: main2.c and main3.c use an additional array named frame_page to record which virtual page occupies each physical frame. This allows the programs to identify which page must be removed when a frame is reused.
+* Replacement tracking: main2.c uses a FIFO pointer to select the next frame for replacement. main3.c uses timestamps to track when each frame was last accessed.
+
+The backing store, BACKING_STORE.bin, provides the contents of pages when they need to be loaded into physical memory.
+
+Each program accepts an input file containing logical addresses. The program opens this file along with BACKING_STORE.bin and creates three output files: out1.txt, out2.txt, and out3.txt. If the required files cannot be opened, the program reports an error and terminates.
+
+For every logical address read from the input file, the program first masks the address to its lower 16 bits. It then extracts the page number and offset using bitwise operations. The page number is obtained by shifting the logical address right by eight bits, while the offset is obtained by masking the lower eight bits.
+
+The program searches the TLB for the requested page. If a valid entry is found, the corresponding frame number is retrieved, and the TLB hit counter is incremented. If the page is not found in the TLB, the program checks the page table. If the page is already in physical memory, its frame number is retrieved from the page table. Otherwise, a page fault occurs, and the page must be loaded from the backing store.
+
+After obtaining the frame number, the program calculates the physical address using the formula:
+
+Physical Address = (Frame Number × Page Size) + Offset
+
+The program then retrieves the signed byte stored at the calculated offset and writes the results to the output files. out1.txt contains the original logical addresses, out2.txt contains the calculated physical addresses, and out3.txt contains the values stored at those physical addresses.
+
+TLB Management
+
+All three programs implement a 16-entry TLB using FIFO insertion order. When a page translation is needed, the program searches the TLB for a valid entry matching the requested page. If no valid entry is found, the program retrieves the frame number from the page table or loads the page from the backing store, then inserts the translation into the TLB.
+
+The TLB insertion function uses a circular pointer to determine where the next entry will be stored. After each insertion, the pointer advances to the next position and returns to the beginning after reaching the end of the array. When a page is inserted again, any existing TLB entry for that page is invalidated to prevent duplicate translations.
+
+In main2.c and main3.c, the TLB lookup also checks whether the frame still contains the requested page. If a page has been removed from physical memory, its old TLB entry is invalidated. These programs also explicitly remove the evicted page's translation during page replacement. This prevents stale TLB entries from referring to frames that have been reassigned to different pages.
+
+Implementation of main1.c: No Page Replacement
+
+The first program implements virtual memory management without page replacement. It defines 256 physical frames, each containing 256 bytes, allowing all 256 virtual pages to fit in physical memory simultaneously.
+
+When a page fault occurs, the load_page() function assigns the page to the next unused physical frame. It calculates the page's location in the backing store by multiplying the page number by the page size, then uses fseek() and fread() to load the page into memory. The page table is updated to record the new frame assignment.
+
+Because this implementation does not replace pages, a loaded page remains in memory for the rest of the program's execution. If all frames were occupied, the program would report a failure to load another page. However, because the program has 256 frames for 256 virtual pages, all distinct pages can fit in memory under normal operation.
+
+This implementation provides a baseline for comparing the effects of page replacement algorithms. It demonstrates address translation, page faults, and TLB behavior without requiring the program to evict pages from physical memory.
+
+Implementation of main2.c: FIFO Page Replacement
+
+The second program implements the First-In, First-Out (FIFO) page replacement algorithm. Unlike the first program, it supports a configurable number of physical frames, allowing physical memory to become full before all virtual pages have been loaded.
+
+The default frame count is 128. The user can specify a different frame count as the second command-line argument, provided it is between 1 and 1024. For example, the program can be executed using ./main2 addresses.txt 64 to simulate memory containing 64 physical frames.
+
+When a page fault occurs and unused frames remain, the program loads the requested page into the next available frame. Once the configured number of frames has been filled, the program replaces an existing page whenever another page fault occurs.
+
+FIFO replacement selects the frame identified by fifo_victim. This pointer initially refers to the first frame and advances circularly after each successful replacement. The selected frame contains the page that was loaded earliest among the frames participating in the replacement cycle.
+
+Before loading the new page, the program invalidates the old page's page-table entry and removes its TLB entry. It then reads the requested page from the backing store and updates frame_page and the page table. This ensures that the new page is correctly mapped to its physical frame.
+
+FIFO is straightforward to implement because it does not require tracking how frequently or recently pages are accessed. However, it may remove a page that is frequently used simply because that page has been in memory the longest.
+
+Implementation of main3.c: LRU Page Replacement
+
+The third program implements the Least Recently Used (LRU) page replacement algorithm. Like the FIFO implementation, it supports a configurable frame count with a default of 128 and a maximum of 1024.
+
+LRU differs from FIFO because it selects a page based on its recent usage rather than the order in which it was loaded. The program maintains a last_used array containing a timestamp for each physical frame. The variable clock_tick acts as a counter that increases whenever a page is accessed or loaded.
+
+When a page fault occurs and all configured frames are occupied, the choose_lru_victim() function examines the timestamps of the available frames and selects the frame with the smallest timestamp. This frame contains the page that has gone the longest without being referenced.
+
+Before replacing the selected page, the program invalidates its page-table entry and removes its TLB entry. The requested page is then loaded from the backing store, and the frame-to-page mapping is updated. The timestamp for the newly loaded page is also updated.
+
+An important part of this implementation is that the program updates last_used[frame] after every successful address translation, including TLB hits. This allows the algorithm to track actual page references rather than only page faults or backing-store loads.
+
+LRU can perform better than FIFO when recently accessed pages are likely to be accessed again. However, it requires additional bookkeeping and searches the frame timestamps to select a replacement candidate.
